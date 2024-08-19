@@ -1,10 +1,8 @@
-# coding: utf-8
-"""JWT in httpOnly cookies with OAuth2 password flow.
-"""
+"""JWT in httpOnly cookies with OAuth2 password flow."""
 
 from calendar import timegm
-from datetime import datetime, timedelta
-from typing import List
+from datetime import datetime, timedelta, UTC
+from typing import List, Optional
 
 import jwt
 
@@ -17,17 +15,15 @@ from pydantic import BaseModel
 
 
 class OAuth2PasswordCookie(OAuth2PasswordBearer):
-    """OAuth2 password flow with token in a httpOnly cookie.
-    """
+    """OAuth2 password flow with token in a httpOnly cookie."""
 
-    def __init__(self, *args, token_name: str = None, **kwargs):
+    def __init__(self, *args, token_name: Optional[str] = None, **kwargs):
         super().__init__(*args, **kwargs)
         self._token_name = token_name or "my-jwt-token"
 
     @property
     def token_name(self) -> str:
-        """Get the name of the token's cookie.
-        """
+        """Get the name of the token's cookie."""
         return self._token_name
 
     async def __call__(self, request: Request) -> str:
@@ -64,7 +60,7 @@ def validate_jwt_payload(token: str) -> dict:
     """
     try:
         payload = jwt.decode(token, "i am a secret", algorithms=["HS256"])
-        utc_now = timegm(datetime.utcnow().utctimetuple())
+        utc_now = timegm(datetime.now(UTC).utctimetuple())
         if payload["exp"] <= utc_now:
             raise HTTPException(401, detail="Credentials have expired")
         return payload
@@ -73,8 +69,7 @@ def validate_jwt_payload(token: str) -> dict:
 
 
 class UserData(BaseModel):
-    """User name, ID and scopes.
-    """
+    """User name, ID and scopes."""
 
     user: str
     user_id: int
@@ -82,8 +77,7 @@ class UserData(BaseModel):
 
 
 def is_authenticated(token: str = Security(oauth2_scheme)) -> UserData:
-    """Dependency on user being authenticated.
-    """
+    """Dependency on user being authenticated."""
     payload = validate_jwt_payload(token)
     return UserData(
         user=payload["user"], user_id=payload["user_id"], scopes=payload["scopes"]
@@ -105,17 +99,17 @@ async def authenticate(form_data: OAuth2PasswordRequestForm = Depends()):
         HTTPException: 401 error if username or password are not recognised.
     """
     user = _USER_DB.get(form_data.username)
-    if user["password"] != form_data.password:
+    if user is None or user["password"] != form_data.password:
         raise HTTPException(status_code=401, detail="Incorrect email or password")
     data = {
         "user": form_data.username,
         "user_id": user["user_id"],
         "scopes": user["scopes"],
     }
-    issued_at = datetime.utcnow()
+    issued_at = datetime.now(UTC)
     expire = issued_at + timedelta(minutes=15)
     data.update({"exp": expire, "iat": issued_at, "sub": "jwt-cookies-test"})
-    encoded_jwt = jwt.encode(data, "i am a secret", algorithm="HS256").decode("utf-8")
+    encoded_jwt = jwt.encode(data, "i am a secret", algorithm="HS256")
     response = JSONResponse({"status": "authenticated"})
     # NOTE: we should also set secure=True to mark this as a `secure` cookie
     # https://tools.ietf.org/html/rfc6265#section-4.1.2.5
@@ -124,7 +118,6 @@ async def authenticate(form_data: OAuth2PasswordRequestForm = Depends()):
 
 
 @app.get("/")
-async def home(_request: Request, user: UserData = Depends(is_authenticated)):
-    """Return sample JSON iff the user is authenticated.
-    """
+async def home(_: Request, user: UserData = Depends(is_authenticated)):
+    """Return sample JSON iff the user is authenticated."""
     return {"status": "ok", "user": user}
